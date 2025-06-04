@@ -1,12 +1,12 @@
 // my-chat-pdf-backend/server.js
-require('dotenv').config(); // Loads variables from .env file into process.env
+require('dotenv').config();
 const express = require('express');
-const fetch = require('node-fetch'); // Or use global.fetch if Node.js 18+
+const fetch = require('node-fetch'); // Using node-fetch v2 for CommonJS
 const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const GEMINI_API_KEY = process.env.GOOGLE_API_KEY; // Securely loaded from backend .env
+const GEMINI_API_KEY = process.env.GOOGLE_API_KEY;
 
 if (!GEMINI_API_KEY) {
     console.error("FATAL ERROR: GOOGLE_API_KEY is not defined in the backend .env file.");
@@ -15,8 +15,8 @@ if (!GEMINI_API_KEY) {
 
 // Configure CORS: Allow requests from your React app's origin
 const corsOptions = {
-  origin: 'http://localhost:5173', // Your React app's development URL (Vite default)
-  // origin: 'http://localhost:3000', // Your React app's development URL (CRA default)
+  origin: 'http://localhost:5173', // Default Vite frontend URL
+  // origin: 'http://localhost:3000', // If using Create React App, change this
   optionsSuccessStatus: 200
 };
 app.use(cors(corsOptions));
@@ -24,11 +24,13 @@ app.use(cors(corsOptions));
 app.use(express.json()); // Middleware to parse JSON request bodies
 
 // Centralized function to make requests to Gemini API
-async function makeGeminiRequest(modelEndpoint, payload) {
-    const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${modelEndpoint}?key=${GEMINI_API_KEY}`;
+async function makeGeminiRequest(modelIdentifier, payload) { // Renamed modelEndpoint to modelIdentifier for clarity
+    // modelIdentifier will be like "embedding-001:embedContent" or "gemini-pro:generateContent"
+    const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${modelIdentifier}?key=${GEMINI_API_KEY}`;
     
     console.log(`Backend: Making request to Gemini: ${API_URL}`);
-    console.log(`Backend: Payload: ${JSON.stringify(payload, null, 2)}`);
+    // For more detailed debugging, you can uncomment the payload logging:
+    // console.log(`Backend: Payload for ${modelIdentifier}: ${JSON.stringify(payload, null, 2)}`);
 
     try {
         const response = await fetch(API_URL, {
@@ -39,32 +41,41 @@ async function makeGeminiRequest(modelEndpoint, payload) {
             body: JSON.stringify(payload),
         });
 
-        const responseData = await response.json(); // Try to parse JSON regardless of status for debugging
+        const responseText = await response.text();
+        let responseData;
+
+        try {
+            responseData = JSON.parse(responseText);
+        } catch (parseError) {
+            console.error(`Backend Gemini API Error: Could not parse JSON response. Status: ${response.status}. Response Text: ${responseText}`);
+            throw { 
+                status: response.status, 
+                message: 'Gemini API returned non-JSON response', 
+                details: responseText 
+            };
+        }
 
         if (!response.ok) {
             console.error(`Backend Gemini API Error (${response.status}):`, responseData);
-            // Ensure a structured error is thrown
             throw { 
                 status: response.status, 
-                message: responseData.error?.message || `Gemini API request failed with status ${response.status}` ,
-                details: responseData.error?.details
+                message: responseData.error?.message || `Gemini API request failed with status ${response.status}`,
+                details: responseData.error?.details || responseData
             };
         }
-        console.log("Backend: Gemini API success response:", responseData);
+        // console.log(`Backend: Gemini API success response for ${modelIdentifier}:`, responseData); // Uncomment for detailed success logging
         return responseData;
     } catch (error) {
-        console.error("Backend: Error in makeGeminiRequest:", error);
-        // If it's already a structured error from above, rethrow it
+        console.error(`Backend: Error in makeGeminiRequest for ${modelIdentifier}:`, error);
         if (error.status) throw error;
-        // Otherwise, wrap it
         throw { status: 500, message: 'Internal server error while contacting Gemini API', details: error.message };
     }
 }
 
 // Endpoint to get embeddings
 app.post('/api/gemini/embed', async (req, res) => {
-    const { texts } = req.body; // Expects an array of texts
-    console.log("Backend /api/gemini/embed received texts:", texts);
+    const { texts } = req.body;
+    console.log("Backend /api/gemini/embed received request for texts count:", texts ? texts.length : 0);
 
     if (!texts || !Array.isArray(texts) || texts.length === 0) {
         return res.status(400).json({ error: 'Invalid request: "texts" must be a non-empty array.' });
@@ -72,14 +83,17 @@ app.post('/api/gemini/embed', async (req, res) => {
 
     try {
         const embeddings = [];
-        // Gemini embedContents often processes one document/content part at a time in the request structure.
-        // For multiple chunks, you might make multiple requests or structure as a batch if supported by the specific model.
-        // For simplicity, here's one by one:
         for (const text of texts) {
-            const response = await makeGeminiRequest(`models/embedding-001:embedContent`, {
-                content: { parts: [{ text }] }
+            if (!text || !text.trim()) {
+                console.warn("Backend /api/gemini/embed: Skipping empty or whitespace-only text chunk for embedding.");
+                embeddings.push([]);
+                continue;
+            }
+            // CORRECTED: Pass only the model name and action, not "models/" prefix
+            const response = await makeGeminiRequest(`embedding-001:embedContent`, {
+                content: { parts: [{ text: text.trim() }] }
             });
-            embeddings.push(response.embedding?.values || []); // Ensure to push even if empty, or handle error
+            embeddings.push(response.embedding?.values || []);
         }
         res.json({ embeddings });
     } catch (error) {
@@ -91,31 +105,43 @@ app.post('/api/gemini/embed', async (req, res) => {
 // Endpoint for chat/QA
 app.post('/api/gemini/chat', async (req, res) => {
     const { context, question } = req.body;
-    console.log("Backend /api/gemini/chat received context/question");
+    console.log("Backend /api/gemini/chat received request for question:", question);
 
-    if (!question) {
-        return res.status(400).json({ error: 'Invalid request: "question" is required.' });
+    if (!question || !question.trim()) {
+        return res.status(400).json({ error: 'Invalid request: "question" is required and cannot be empty.' });
     }
 
-    // Using the prompt structure from your Python code
     const prompt = `
     Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in
-    provided context just say, "answer is not available in the context", don't provide the wrong answer
+    provided context just say, "answer is not available in the context", don't provide the wrong answer.
 
     Context:
-    ${context || "No context provided."}? 
-    Question: 
-    ${question}
+    ${context || "No context provided."}
+
+    Question:
+    ${question.trim()}
 
     Answer:
     `;
 
     try {
-        const response = await makeGeminiRequest(`gemini-pro:generateContent`, { // Or your preferred model e.g., gemini-1.5-flash-latest
+        // CHANGE YOUR GEMINI MODEL VERSION HERE 
+
+
+        // Pass the model name and action for generation
+        // const response = await makeGeminiRequest(`gemini-pro:generateContent`, { // Or your preferred model like "gemini-1.5-flash-latest:generateContent"
+        //     contents: [{ parts: [{ text: prompt }] }],
+        //     generationConfig: {
+        //         temperature: 0.3,
+        //     }
+        // });
+        // CORRECTED: Using a more current and likely available model identifier for v1beta
+
+
+        const response = await makeGeminiRequest(`gemini-1.5-flash-latest:generateContent`, {
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
                 temperature: 0.3,
-                // maxOutputTokens: 2048, // Optional: configure as needed
             }
         });
         
