@@ -17,6 +17,7 @@ function cosineSimilarity(vecA, vecB) {
     console.warn("Cosine similarity: Invalid vectors provided or length mismatch.", vecA, vecB);
     return 0;
   }
+  
   let dotProduct = 0;
   let normA = 0;
   let normB = 0;
