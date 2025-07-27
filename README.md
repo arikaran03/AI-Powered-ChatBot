@@ -164,16 +164,6 @@ The repository is organized into two main parts:
     * Check for CORS errors in the browser console (though the provided `server.js` should handle this for `localhost:5173`).
 * **Restart Servers:** After any changes to `.env` files or significant code modifications, always restart both the frontend and backend servers.
 
-## 🌱 Future Enhancements
-
-* [ ] Implement robust client-side or backend OCR for scanned PDFs/images.
-* [ ] Store and reuse embeddings for uploaded documents (e.g., using `localStorage` or a vector database for persistence).
-* [ ] Display source document/page number for answers.
-* [ ] Add support for more file types.
-* [ ] Improve UI/UX, add loading indicators for individual file processing.
-* [ ] More advanced text chunking strategies.
-* [ ] Option to select different Gemini models.
-
 ##🤝 Contributing
 
 Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/arikaran03/AI-Powered-ChatBot/issues).
